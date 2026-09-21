@@ -97,10 +97,12 @@ def load_model():
         return model
 
     except Exception:
+
         st.error(
             "❌ Model could not be loaded. "
             "Make sure smartstudy_model.pkl is in the same folder as app.py."
         )
+
         st.stop()
 
 
@@ -121,54 +123,42 @@ explainer = load_shap_explainer(model)
 
 
 # =========================================================
-# GEMINI CLIENT + CONNECTION TEST
+# GEMINI CLIENT
 # =========================================================
 
-@st.cache_resource
 def create_gemini_client():
 
     api_key = None
 
-    # Streamlit Cloud Secret
+    # First try Streamlit Secrets
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
         api_key = None
 
-    # Local/environment fallback
+    # Then try environment variable
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
-        return None, "API key not found."
+        return None
 
     try:
 
-        client = genai.Client(
-            api_key=api_key
-        )
+        client = genai.Client(api_key=api_key)
 
-        # Actually test the Gemini API.
-        # This makes sure the key is not only present,
-        # but can really communicate with Gemini.
+        return client
 
-        test_response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents="Reply with only the word OK."
-        )
+    except Exception:
 
-        if test_response and test_response.text:
-
-            return client, None
-
-        return None, "Gemini returned an empty response."
-
-    except Exception as e:
-
-        return None, f"{type(e).__name__}: {e}"
+        return None
 
 
-gemini_client, gemini_error = create_gemini_client()
+# IMPORTANT:
+# Do not cache this.
+# This makes sure a newly changed Streamlit Secret is picked up.
+
+gemini_client = create_gemini_client()
 
 GEMINI_MODEL = "gemini-3.8-flash"
 
@@ -405,21 +395,26 @@ if "predicted_data" not in st.session_state:
 if "what_if_prediction" not in st.session_state:
     st.session_state.what_if_prediction = None
 
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+
 
 # =========================================================
 # IMPORTANT:
-# CHECK WHETHER CURRENT INPUTS MATCH LAST PREDICTION
+# INVALIDATE OLD PREDICTION WHEN INPUTS CHANGE
 # =========================================================
 
-prediction_is_valid = False
+prediction_is_valid = (
+    st.session_state.predicted_data is not None
+    and st.session_state.predicted_data.equals(current_input)
+)
 
-if st.session_state.predicted_data is not None:
 
-    prediction_is_valid = (
-        st.session_state.predicted_data.equals(
-            current_input
-        )
-    )
+if not prediction_is_valid:
+
+    st.session_state.prediction = None
+    st.session_state.percentage = None
+    st.session_state.what_if_prediction = None
 
 
 # =========================================================
@@ -428,9 +423,7 @@ if st.session_state.predicted_data is not None:
 
 if predict_button:
 
-    prediction = model.predict(
-        current_input
-    )[0]
+    prediction = model.predict(current_input)[0]
 
     prediction = float(
         np.clip(
@@ -440,9 +433,7 @@ if predict_button:
         )
     )
 
-    percentage = (
-        prediction / 20
-    ) * 100
+    percentage = (prediction / 20) * 100
 
     st.session_state.prediction = prediction
 
@@ -450,12 +441,11 @@ if predict_button:
 
     st.session_state.predicted_data = current_input.copy()
 
+    # Reset What-If
     st.session_state.what_if_prediction = None
 
-    prediction_is_valid = True
-
-    if "chat_messages" in st.session_state:
-        st.session_state.chat_messages = []
+    # Reset chat for new student/input
+    st.session_state.chat_messages = []
 
 
 # =========================================================
@@ -464,7 +454,7 @@ if predict_button:
 
 if (
     st.session_state.prediction is None
-    or not prediction_is_valid
+    or st.session_state.predicted_data is None
 ):
 
     st.info(
@@ -648,6 +638,7 @@ if health <= 2:
 
 
 for item in analysis:
+
     st.write(item)
 
 
@@ -671,15 +662,12 @@ These are model explanations, not causal conclusions.
 
 try:
 
-    shap_values = explainer.shap_values(
-        predicted_data
-    )
+    shap_values = explainer.shap_values(predicted_data)
 
-    shap_values = np.array(
-        shap_values
-    )
+    shap_values = np.array(shap_values)
 
     if shap_values.ndim == 2:
+
         shap_values = shap_values[0]
 
     feature_names = predicted_data.columns
@@ -824,6 +812,7 @@ if len(recommendations) == 0:
 
 
 for recommendation in recommendations:
+
     st.write(recommendation)
 
 
@@ -956,7 +945,8 @@ if gemini_client is not None:
 else:
 
     st.warning(
-        "🟠 Gemini AI is currently unavailable."
+        "🟠 Gemini AI is currently unavailable. "
+        "Check your GEMINI_API_KEY in Streamlit Secrets."
     )
 
 
@@ -972,7 +962,6 @@ def fallback_response(question):
     if (
         "prediction" in question_lower
         or "grade" in question_lower
-        or "performance" in question_lower
     ):
 
         return (
@@ -1036,13 +1025,13 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 
 
+# Display previous messages
+
 for message in st.session_state.chat_messages:
 
     with st.chat_message(message["role"]):
 
-        st.markdown(
-            message["content"]
-        )
+        st.markdown(message["content"])
 
 
 # =========================================================
@@ -1055,6 +1044,10 @@ question = st.chat_input(
 
 
 if question:
+
+    # -----------------------------------------------------
+    # USER MESSAGE
+    # -----------------------------------------------------
 
     st.session_state.chat_messages.append({
 
@@ -1070,6 +1063,10 @@ if question:
         st.markdown(question)
 
 
+    # -----------------------------------------------------
+    # AI RESPONSE
+    # -----------------------------------------------------
+
     with st.chat_message("assistant"):
 
         if gemini_client is not None:
@@ -1079,7 +1076,6 @@ if question:
                 what_if_text = (
                     "No What-If simulation has been run."
                 )
-
 
                 if st.session_state.what_if_prediction is not None:
 
@@ -1143,14 +1139,32 @@ USER QUESTION:
                 )
 
 
+                if response is None:
+
+                    raise Exception(
+                        "Gemini returned an empty response."
+                    )
+
+
                 answer = response.text
 
 
-            except Exception:
+                if not answer:
+
+                    raise Exception(
+                        "Gemini returned no text in the response."
+                    )
+
+
+            except Exception as e:
+
+                # Show the real API problem so we can diagnose it.
+                st.error(
+                    f"Gemini API error: {type(e).__name__}: {e}"
+                )
 
                 answer = (
-                    "Gemini was temporarily unavailable, so I will "
-                    "give you a basic explanation instead.\n\n"
+                    "Gemini could not answer this request right now.\n\n"
                     + fallback_response(question)
                 )
 
