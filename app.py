@@ -121,7 +121,7 @@ explainer = load_shap_explainer(model)
 
 
 # =========================================================
-# GEMINI CLIENT
+# GEMINI CLIENT + CONNECTION TEST
 # =========================================================
 
 @st.cache_resource
@@ -129,40 +129,46 @@ def create_gemini_client():
 
     api_key = None
 
-    # First check environment variable
+    # Streamlit Cloud Secret
     try:
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
         api_key = None
 
-    # If environment variable is not available,
-    # check Streamlit Secrets
+    # Local/environment fallback
     if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY")
 
-        try:
-            api_key = st.secrets["GEMINI_API_KEY"]
-
-        except Exception:
-            api_key = None
-
-    # If API key is not available
     if not api_key:
-        return None
+        return None, "API key not found."
 
-    # Create Gemini client
     try:
 
         client = genai.Client(
             api_key=api_key
         )
 
-        return client
+        # Actually test the Gemini API.
+        # This makes sure the key is not only present,
+        # but can really communicate with Gemini.
 
-    except Exception:
-        return None
+        test_response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents="Reply with only the word OK."
+        )
+
+        if test_response and test_response.text:
+
+            return client, None
+
+        return None, "Gemini returned an empty response."
+
+    except Exception as e:
+
+        return None, f"{type(e).__name__}: {e}"
 
 
-gemini_client = create_gemini_client()
+gemini_client, gemini_error = create_gemini_client()
 
 GEMINI_MODEL = "gemini-3.8-flash"
 
@@ -196,8 +202,7 @@ What-If Simulation • AI Study Assistant
 st.sidebar.title("🎛️ Student Information")
 
 st.sidebar.markdown(
-    "Enter the student's information below and click "
-    "**Predict Student Performance**."
+    "Enter the student's information below and click **Predict Student Performance**."
 )
 
 
@@ -218,7 +223,6 @@ studytime = st.sidebar.selectbox(
     }[x]
 )
 
-
 failures = st.sidebar.number_input(
     "Previous Failures",
     min_value=0,
@@ -226,7 +230,6 @@ failures = st.sidebar.number_input(
     value=0,
     step=1
 )
-
 
 absences = st.sidebar.number_input(
     "Absences",
@@ -243,14 +246,12 @@ absences = st.sidebar.number_input(
 
 st.sidebar.subheader("🧠 Lifestyle")
 
-
 freetime = st.sidebar.slider(
     "Free Time",
     min_value=1,
     max_value=5,
     value=3
 )
-
 
 goout = st.sidebar.slider(
     "Going Out",
@@ -259,14 +260,12 @@ goout = st.sidebar.slider(
     value=3
 )
 
-
 health = st.sidebar.slider(
     "Health",
     min_value=1,
     max_value=5,
     value=3
 )
-
 
 traveltime = st.sidebar.slider(
     "Travel Time",
@@ -282,13 +281,11 @@ traveltime = st.sidebar.slider(
 
 st.sidebar.subheader("🏫 Support & Activities")
 
-
 schoolsup = st.sidebar.selectbox(
     "Extra Educational Support",
     [0, 1],
     format_func=lambda x: "Yes" if x == 1 else "No"
 )
-
 
 famsup = st.sidebar.selectbox(
     "Family Educational Support",
@@ -296,13 +293,11 @@ famsup = st.sidebar.selectbox(
     format_func=lambda x: "Yes" if x == 1 else "No"
 )
 
-
 paid = st.sidebar.selectbox(
     "Extra Paid Classes",
     [0, 1],
     format_func=lambda x: "Yes" if x == 1 else "No"
 )
-
 
 activities = st.sidebar.selectbox(
     "Extra-Curricular Activities",
@@ -310,13 +305,11 @@ activities = st.sidebar.selectbox(
     format_func=lambda x: "Yes" if x == 1 else "No"
 )
 
-
 internet = st.sidebar.selectbox(
     "Internet Access",
     [0, 1],
     format_func=lambda x: "Yes" if x == 1 else "No"
 )
-
 
 higher = st.sidebar.selectbox(
     "Wants Higher Education",
@@ -331,7 +324,6 @@ higher = st.sidebar.selectbox(
 
 st.sidebar.subheader("📊 Previous Grades")
 
-
 G1 = st.sidebar.number_input(
     "Previous Grade G1",
     min_value=0.0,
@@ -339,7 +331,6 @@ G1 = st.sidebar.number_input(
     value=10.0,
     step=0.5
 )
-
 
 G2 = st.sidebar.number_input(
     "Previous Grade G2",
@@ -403,23 +394,32 @@ predict_button = st.button(
 # =========================================================
 
 if "prediction" not in st.session_state:
-
     st.session_state.prediction = None
 
-
 if "percentage" not in st.session_state:
-
     st.session_state.percentage = None
 
-
 if "predicted_data" not in st.session_state:
-
     st.session_state.predicted_data = None
 
-
 if "what_if_prediction" not in st.session_state:
-
     st.session_state.what_if_prediction = None
+
+
+# =========================================================
+# IMPORTANT:
+# CHECK WHETHER CURRENT INPUTS MATCH LAST PREDICTION
+# =========================================================
+
+prediction_is_valid = False
+
+if st.session_state.predicted_data is not None:
+
+    prediction_is_valid = (
+        st.session_state.predicted_data.equals(
+            current_input
+        )
+    )
 
 
 # =========================================================
@@ -428,7 +428,9 @@ if "what_if_prediction" not in st.session_state:
 
 if predict_button:
 
-    prediction = model.predict(current_input)[0]
+    prediction = model.predict(
+        current_input
+    )[0]
 
     prediction = float(
         np.clip(
@@ -438,7 +440,9 @@ if predict_button:
         )
     )
 
-    percentage = (prediction / 20) * 100
+    percentage = (
+        prediction / 20
+    ) * 100
 
     st.session_state.prediction = prediction
 
@@ -446,12 +450,11 @@ if predict_button:
 
     st.session_state.predicted_data = current_input.copy()
 
-    # Reset What-If
     st.session_state.what_if_prediction = None
 
-    # Reset chat
-    if "chat_messages" in st.session_state:
+    prediction_is_valid = True
 
+    if "chat_messages" in st.session_state:
         st.session_state.chat_messages = []
 
 
@@ -459,7 +462,10 @@ if predict_button:
 # STOP BEFORE PREDICTION
 # =========================================================
 
-if st.session_state.prediction is None:
+if (
+    st.session_state.prediction is None
+    or not prediction_is_valid
+):
 
     st.info(
         "👈 Enter the student information from the sidebar and click "
@@ -642,7 +648,6 @@ if health <= 2:
 
 
 for item in analysis:
-
     st.write(item)
 
 
@@ -675,7 +680,6 @@ try:
     )
 
     if shap_values.ndim == 2:
-
         shap_values = shap_values[0]
 
     feature_names = predicted_data.columns
@@ -820,7 +824,6 @@ if len(recommendations) == 0:
 
 
 for recommendation in recommendations:
-
     st.write(recommendation)
 
 
@@ -943,7 +946,7 @@ or What-If scenario.
 
 
 # =========================================================
-# GEMINI CONNECTION STATUS
+# GEMINI STATUS
 # =========================================================
 
 if gemini_client is not None:
@@ -953,8 +956,7 @@ if gemini_client is not None:
 else:
 
     st.warning(
-        "🟠 Gemini AI is not connected. "
-        "Please check GEMINI_API_KEY in Streamlit Secrets."
+        "🟠 Gemini AI is currently unavailable."
     )
 
 
@@ -1034,8 +1036,6 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 
 
-# Display previous messages
-
 for message in st.session_state.chat_messages:
 
     with st.chat_message(message["role"]):
@@ -1056,8 +1056,6 @@ question = st.chat_input(
 
 if question:
 
-    # User message
-
     st.session_state.chat_messages.append({
 
         "role": "user",
@@ -1071,10 +1069,6 @@ if question:
 
         st.markdown(question)
 
-
-    # =====================================================
-    # AI RESPONSE
-    # =====================================================
 
     with st.chat_message("assistant"):
 
@@ -1090,10 +1084,8 @@ if question:
                 if st.session_state.what_if_prediction is not None:
 
                     what_if_text = (
-
                         f"What-If prediction: "
                         f"{st.session_state.what_if_prediction:.2f}/20"
-
                     )
 
 
@@ -1146,11 +1138,8 @@ USER QUESTION:
 
 
                 response = gemini_client.models.generate_content(
-
                     model=GEMINI_MODEL,
-
                     contents=prompt
-
                 )
 
 
@@ -1160,21 +1149,17 @@ USER QUESTION:
             except Exception:
 
                 answer = (
-
                     "Gemini was temporarily unavailable, so I will "
                     "give you a basic explanation instead.\n\n"
                     + fallback_response(question)
-
                 )
 
 
         else:
 
             answer = (
-
                 "Gemini AI is currently unavailable.\n\n"
                 + fallback_response(question)
-
             )
 
 
@@ -1196,11 +1181,9 @@ USER QUESTION:
 
 st.markdown("---")
 
-
 st.caption(
     "GradeLens — Student Performance & Study Pattern Intelligence System"
 )
-
 
 st.caption(
     "Built using Machine Learning, Random Forest, SHAP and Gemini AI."
